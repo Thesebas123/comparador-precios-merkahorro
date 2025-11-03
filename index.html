@@ -236,6 +236,14 @@
 
     <script>
         // --- CONFIGURACIÓN E INICIALIZACIÓN ---
+        
+        // ** ARREGLO CRÍTICO DE PDF.JS **
+        // Se le dice a PDF.js dónde encontrar el archivo worker, que contiene la lógica
+        // necesaria para que funcione 'getDocument'. Usamos la versión de CDN.
+        if (typeof pdfjsLib !== 'undefined') {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js';
+        }
+
 
         // Clave de API (se deja vacía, será gestionada por el entorno)
         const apiKey = ""; 
@@ -357,7 +365,6 @@
         async function processPDF(file) {
             // Verificar si pdfjsLib existe (doble check de seguridad)
             if (typeof pdfjsLib === 'undefined' || !pdfjsLib.getDocument) {
-                // Esta verificación es la clave para evitar el ReferenceError
                 showError("La librería PDF.js no se cargó o inicializó correctamente. Por favor, intenta recargar la página.");
                 return;
             }
@@ -368,6 +375,7 @@
                     const typedarray = new Uint8Array(e.target.result);
                     
                     // Inicializar el documento PDF
+                    // ESTA LÍNEA DABA ERROR PORQUE FALTABA LA CONFIGURACIÓN DE WORKERSRC
                     const pdf = await pdfjsLib.getDocument({data: typedarray}).promise; 
 
                     totalPagesEl.textContent = pdf.numPages;
