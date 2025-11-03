@@ -6,12 +6,14 @@
     <title>Analizador y Comparador de Precios</title>
     <!-- Carga de Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Carga de PDF.js (para leer el PDF) -->
+    
+    <!-- PDF.js - Ahora se usa la versión completa (worker incluido) para evitar el error de ruta del Worker. -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    
     <!-- Importación de la fuente 'Inter' (letra corporativa) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         /* Aplicar la fuente corporativa a toda la app */
         body {
@@ -227,8 +229,10 @@
     <script>
         // --- CONFIGURACIÓN E INICIALIZACIÓN ---
 
-        // Configurar el 'worker' de PDF.js
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js';
+        // CORRECCIÓN CRÍTICA: Se omite la carga de pdf.worker.min.js para evitar errores de ruta en móviles.
+        // La versión completa de pdf.js (pdf.min.js) ya incluye el worker en la misma librería.
+        // Esto soluciona el error "Failed to load worker script".
+        // pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js'; // LÍNEA ELIMINADA
 
         // Clave de API (se deja vacía, será gestionada por el entorno)
         const apiKey = ""; 
@@ -345,7 +349,7 @@
             mostrarTab('tab-analisis');
         });
 
-        // --- LÓGICA DE PROCESAMIENTO DE PDF (Se mantiene igual) ---
+        // --- LÓGICA DE PROCESAMIENTO DE PDF ---
         
         /**
          * Procesa el archivo PDF página por página.
@@ -355,8 +359,9 @@
                 const fileReader = new FileReader();
                 fileReader.onload = async (e) => {
                     const typedarray = new Uint8Array(e.target.result);
-                    const pdf = await pdfjsLib.getDocument(typedarray).promise;
-                    
+                    // Inicializar el documento PDF
+                    const pdf = await pdfjsLib.getDocument({data: typedarray}).promise; // Uso corregido para compatibilidad
+
                     totalPagesEl.textContent = pdf.numPages;
                     productosMerkahorro = []; // Limpiar resultados anteriores
 
@@ -368,9 +373,25 @@
                         const base64Image = await renderPageAsImage(pdf, i);
                         const items = await analyzeImageWithGemini(base64Image);
                         if (items) {
-                            productosMerkahorro = productosMerkahorro.concat(items);
+                            // Concatenar y limpiar productos duplicados o inválidos
+                            const newItems = items.filter(
+                                item => item.descripcion && typeof item.precioUnitario === 'number' && item.precioUnitario > 0
+                            );
+                            productosMerkahorro = productosMerkahorro.concat(newItems);
                         }
                     }
+
+                    // Filtrar duplicados por descripción (puede haber productos repetidos en la factura)
+                    const uniqueProducts = {};
+                    productosMerkahorro.forEach(item => {
+                        // Usar una clave normalizada para evitar duplicados por espacios/mayúsculas
+                        const key = item.descripcion.trim().toUpperCase();
+                        if (!uniqueProducts[key]) {
+                            uniqueProducts[key] = item;
+                        }
+                    });
+                    productosMerkahorro = Object.values(uniqueProducts);
+
 
                     // Proceso completado
                     loadingState.classList.add('hidden');
@@ -379,13 +400,13 @@
                         comparisonPrompt.classList.remove('hidden');
                         generarDatosComparacion(productosMerkahorro);
                     } else {
-                        showError("No se encontraron productos en la factura o no se pudo analizar.");
+                        showError("No se encontraron productos válidos en la factura o no se pudo analizar.");
                     }
                 };
                 fileReader.readAsArrayBuffer(file);
             } catch (error) {
                 console.error("Error al procesar PDF:", error);
-                showError("Error al leer el archivo PDF. Asegúrate de que no esté dañado.");
+                showError("Error al leer el archivo PDF. Asegúrate de que no esté dañado o inténtalo de nuevo.");
             }
         }
 
@@ -409,16 +430,16 @@
             await page.render(renderContext).promise;
             
             // Exportar como JPEG (suele ser más pequeño para la API) y quitar prefijo
-            return canvas.toDataURL('image/jpeg').split(',')[1];
+            return canvas.toDataURL('image/jpeg', 0.8).split(',')[1]; // 0.8 de calidad
         }
 
-        // --- LÓGICA DE API (GEMINI - Se mantiene igual) ---
+        // --- LÓGICA DE API (GEMINI) ---
 
         /**
          * Envía la imagen de la página de la factura a la API de Gemini para su análisis.
          */
         async function analyzeImageWithGemini(base64ImageData) {
-            const prompt = "Extrae todos los productos, sus descripciones y su 'Precio unitario' (el precio antes de descuentos o impuestos si es posible) de esta página de factura. Ignora totales, subtotales, impuestos y cualquier otro texto que no sea un producto.";
+            const prompt = "Extrae todos los productos, sus descripciones y su 'Precio unitario' (el precio antes de descuentos o impuestos si es posible) de esta página de factura. Ignora totales, subtotales, impuestos y cualquier otro texto que no sea un producto. Devuelve solo un array de objetos JSON.";
 
             const payload = {
                 contents: [
@@ -438,19 +459,14 @@
                 generationConfig: {
                     responseMimeType: "application/json",
                     responseSchema: {
-                        type: "OBJECT",
-                        properties: {
-                            "items": {
-                                type: "ARRAY",
-                                items: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        "descripcion": { "type": "STRING" },
-                                        "precioUnitario": { "type": "NUMBER" }
-                                    },
-                                    required: ["descripcion", "precioUnitario"]
-                                }
-                            }
+                        type: "ARRAY",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                "descripcion": { "type": "STRING" },
+                                "precioUnitario": { "type": "NUMBER" }
+                            },
+                            required: ["descripcion", "precioUnitario"]
                         }
                     }
                 }
@@ -473,7 +489,7 @@
                 if (result.candidates && result.candidates.length > 0) {
                     const jsonText = result.candidates[0].content.parts[0].text;
                     const parsedJson = JSON.parse(jsonText);
-                    return parsedJson.items || [];
+                    return Array.isArray(parsedJson) ? parsedJson : [];
                 } else {
                     console.warn("La API no devolvió candidatos:", result);
                     return [];
@@ -481,7 +497,7 @@
 
             } catch (error) {
                 console.error("Error en analyzeImageWithGemini:", error);
-                showError(`No se pudo conectar con el servicio de análisis: ${error.message}`);
+                // No mostrar error crítico aquí, solo en el proceso principal, ya que es un reintento por página
                 return null;
             }
         }
@@ -494,6 +510,7 @@
                 return await fetch(url, options);
             } catch (err) {
                 if (retries > 0) {
+                    // console.log(`Reintento de fetch (${retries} restantes)...`);
                     await new Promise(resolve => setTimeout(resolve, delay));
                     return fetchWithRetry(url, options, retries - 1, delay * 2);
                 } else {
@@ -558,14 +575,27 @@
             let totalLPineda = 0;
             let totalLa200 = 0;
             let totalMinimo = 0;
+            
+            // Totales por lugar (para encontrar el mejor lugar global)
+            let totalesPorSuper = {
+                merkahorro: 0,
+                exito: 0,
+                lPineda: 0,
+                la200: 0
+            };
 
             productosParaComparar.forEach(item => {
                 const p = item.precios;
 
+                // Suma para el total de la factura original
                 totalMerkahorro += p.merkahorro;
-                totalExito += p.exito;
-                totalLPineda += p.lPineda;
-                totalLa200 += p.la200;
+                
+                // Suma para el total por supermercado simulado
+                totalesPorSuper.merkahorro += p.merkahorro;
+                totalesPorSuper.exito += p.exito;
+                totalesPorSuper.lPineda += p.lPineda;
+                totalesPorSuper.la200 += p.la200;
+
 
                 // Encontrar el precio más bajo para este producto (el 'teórico')
                 const min = Math.min(p.merkahorro, p.exito, p.lPineda, p.la200);
@@ -574,10 +604,10 @@
 
             // 2. Encontrar el mejor lugar global (el más barato si todo se comprara allí)
             const totales = {
-                [SUPERMERCADOS.merkahorro]: totalMerkahorro,
-                [SUPERMERCADOS.exito]: totalExito,
-                [SUPERMERCADOS.lPineda]: totalLPineda,
-                [SUPERMERCADOS.la200]: totalLa200
+                [SUPERMERCADOS.merkahorro]: totalesPorSuper.merkahorro,
+                [SUPERMERCADOS.exito]: totalesPorSuper.exito,
+                [SUPERMERCADOS.lPineda]: totalesPorSuper.lPineda,
+                [SUPERMERCADOS.la200]: totalesPorSuper.la200
             };
 
             let mejorLugar = { name: '', total: Infinity };
@@ -595,7 +625,17 @@
             // 4. Renderizar el resumen
             totalMerkahorroEl.textContent = formatearMoneda(totalMerkahorro);
             totalMinimoEl.textContent = formatearMoneda(totalMinimo);
-            totalAhorroEl.textContent = formatearMoneda(ahorroPotencial);
+            // Mostrar el ahorro potencial solo si es positivo
+            if (ahorroPotencial > 0) {
+                totalAhorroEl.textContent = formatearMoneda(ahorroPotencial);
+                totalAhorroEl.parentElement.classList.remove('bg-red-50', 'border-red-500');
+                totalAhorroEl.parentElement.classList.add('bg-yellow-50', 'border-yellow-500');
+            } else {
+                totalAhorroEl.textContent = formatearMoneda(0);
+                totalAhorroEl.parentElement.classList.remove('bg-yellow-50', 'border-yellow-500');
+                totalAhorroEl.parentElement.classList.add('bg-red-50', 'border-red-500');
+            }
+
             
             mejorLugarGlobalEl.textContent = mejorLugar.name;
             costoMejorLugarEl.textContent = `Costo total: ${formatearMoneda(mejorLugar.total)}`;
@@ -615,6 +655,8 @@
             resultsTable.classList.add('hidden');
             comparisonPrompt.classList.add('hidden');
             tablaResultados.innerHTML = '';
+            // Asegúrate de que la fila vacía esté presente al resetear la tabla de comparación
+            tablaComparacion.innerHTML = `<tr id="fila-vacia-comparacion"><td colspan="6" class="px-6 py-12 text-center text-gray-500">Analiza tu factura de Merkahorro para ver la comparación aquí.</td></tr>`;
             filaVaciaComparacion.style.display = 'table-row';
             comparisonErrorMessage.classList.add('hidden');
             summaryModule.classList.add('hidden'); // Ocultar resumen al resetear
@@ -627,6 +669,7 @@
             loadingState.classList.add('hidden');
             apiErrorMessage.textContent = message;
             apiError.classList.remove('hidden');
+            processButton.disabled = false; // Permitir reintento
         }
 
         /**
@@ -649,15 +692,13 @@
             
             // Llenar tabla de resultados
             items.forEach(item => {
-                if (item.descripcion && typeof item.precioUnitario === 'number') {
-                    const fila = `
-                        <tr class="hover:bg-gray-50">
-                            <td class="px-6 py-4 whitespace-normal text-sm font-medium text-gray-900">${item.descripcion}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-right">${formatearMoneda(item.precioUnitario)}</td>
-                        </tr>
-                    `;
-                    tablaResultados.innerHTML += fila;
-                }
+                const fila = `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-normal text-sm font-medium text-gray-900">${item.descripcion}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-right">${formatearMoneda(item.precioUnitario)}</td>
+                    </tr>
+                `;
+                tablaResultados.innerHTML += fila;
             });
 
             // Mostrar sección de resultados
@@ -686,12 +727,12 @@
                 
                 const getCelda = (precio, key) => {
                     const supermercado = SUPERMERCADOS[key];
-                    const isMin = precio === minPrecio;
+                    const isMin = precio === minPrecio && precio > 0; // Solo si es el mínimo y no es cero
                     // Si es el mínimo, establece el nombre
                     if (isMin) mejorSuper = supermercado.replace(' (Simulado)', ''); 
                     
                     const classes = isMin 
-                        ? 'bg-green-100 text-green-700 font-bold p-2 inline-block w-24 text-center' 
+                        ? 'bg-green-100 text-green-700 font-bold p-2 inline-block w-24 text-center rounded-md shadow-sm' 
                         : 'text-gray-900 p-2 inline-block w-24 text-center';
 
                     return `<td class="px-3 py-4 whitespace-nowrap text-sm text-center">
@@ -717,3 +758,4 @@
     </script>
 </body>
 </html>
+
