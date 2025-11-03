@@ -7,7 +7,7 @@
     <!-- Carga de Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- PDF.js - Ahora se usa la versión completa (worker incluido) para evitar el error de ruta del Worker. -->
+    <!-- PDF.js - Versión completa. Debe ser lo primero en cargar el JavaScript. -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
     
     <!-- Importación de la fuente 'Inter' (letra corporativa) -->
@@ -229,11 +229,6 @@
     <script>
         // --- CONFIGURACIÓN E INICIALIZACIÓN ---
 
-        // CORRECCIÓN CRÍTICA: Se omite la carga de pdf.worker.min.js para evitar errores de ruta en móviles.
-        // La versión completa de pdf.js (pdf.min.js) ya incluye el worker en la misma librería.
-        // Esto soluciona el error "Failed to load worker script".
-        // pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js'; // LÍNEA ELIMINADA
-
         // Clave de API (se deja vacía, será gestionada por el entorno)
         const apiKey = ""; 
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
@@ -282,37 +277,6 @@
 
         let selectedFile = null;
 
-        // --- MANEJADORES DE EVENTOS ---
-
-        /**
-         * Se activa cuando el usuario selecciona un archivo.
-         */
-        pdfUpload.addEventListener('change', (e) => {
-            selectedFile = e.target.files[0];
-            if (selectedFile && selectedFile.type === 'application/pdf') {
-                fileLabelText.textContent = selectedFile.name;
-                processButton.disabled = false;
-                fileError.classList.add('hidden');
-            } else {
-                fileLabelText.textContent = 'Seleccionar Factura (PDF)';
-                processButton.disabled = true;
-                fileError.classList.remove('hidden');
-                selectedFile = null;
-            }
-        });
-
-        /**
-         * Se activa al hacer clic en el botón "Procesar Factura".
-         */
-        processButton.addEventListener('click', () => {
-            if (selectedFile) {
-                // Reiniciar la UI a un estado de carga
-                resetUI();
-                loadingState.classList.remove('hidden');
-                processPDF(selectedFile);
-            }
-        });
-
         /**
          * Maneja la visualización de pestañas.
          */
@@ -344,9 +308,37 @@
             }
         }
 
-        // Establecer la pestaña inicial
+
+        // --- MANEJADORES DE EVENTOS Y LÓGICA DE INICIO ---
+
+        // **CORRECCIÓN CLAVE:** Envolver los manejadores de eventos en DOMContentLoaded
         document.addEventListener('DOMContentLoaded', () => {
+            // 1. Establecer la pestaña inicial
             mostrarTab('tab-analisis');
+
+            // 2. Manejadores de Eventos
+            pdfUpload.addEventListener('change', (e) => {
+                selectedFile = e.target.files[0];
+                if (selectedFile && selectedFile.type === 'application/pdf') {
+                    fileLabelText.textContent = selectedFile.name;
+                    processButton.disabled = false;
+                    fileError.classList.add('hidden');
+                } else {
+                    fileLabelText.textContent = 'Seleccionar Factura (PDF)';
+                    processButton.disabled = true;
+                    fileError.classList.remove('hidden');
+                    selectedFile = null;
+                }
+            });
+
+            processButton.addEventListener('click', () => {
+                if (selectedFile) {
+                    // Reiniciar la UI a un estado de carga
+                    resetUI();
+                    loadingState.classList.remove('hidden');
+                    processPDF(selectedFile);
+                }
+            });
         });
 
         // --- LÓGICA DE PROCESAMIENTO DE PDF ---
@@ -355,12 +347,20 @@
          * Procesa el archivo PDF página por página.
          */
         async function processPDF(file) {
+            // Verificar si pdfjsLib existe (doble check de seguridad)
+            if (typeof pdfjsLib === 'undefined') {
+                showError("La librería PDF.js no se cargó correctamente. Por favor, intenta recargar la página.");
+                return;
+            }
+
             try {
                 const fileReader = new FileReader();
                 fileReader.onload = async (e) => {
                     const typedarray = new Uint8Array(e.target.result);
+                    
                     // Inicializar el documento PDF
-                    const pdf = await pdfjsLib.getDocument({data: typedarray}).promise; // Uso corregido para compatibilidad
+                    // Uso corregido y robusto para obtener el documento
+                    const pdf = await pdfjsLib.getDocument({data: typedarray}).promise; 
 
                     totalPagesEl.textContent = pdf.numPages;
                     productosMerkahorro = []; // Limpiar resultados anteriores
@@ -400,7 +400,7 @@
                         comparisonPrompt.classList.remove('hidden');
                         generarDatosComparacion(productosMerkahorro);
                     } else {
-                        showError("No se encontraron productos válidos en la factura o no se pudo analizar.");
+                        showError("No se encontraron productos válidos en la factura o no se pudo analizar. Intenta con una factura de mejor calidad.");
                     }
                 };
                 fileReader.readAsArrayBuffer(file);
@@ -571,9 +571,6 @@
 
             // 1. Calcular totales por supermercado y total mínimo
             let totalMerkahorro = 0;
-            let totalExito = 0;
-            let totalLPineda = 0;
-            let totalLa200 = 0;
             let totalMinimo = 0;
             
             // Totales por lugar (para encontrar el mejor lugar global)
@@ -710,11 +707,16 @@
          */
         function renderizarComparacion() {
             if (productosParaComparar.length === 0) {
-                filaVaciaComparacion.style.display = 'table-row';
+                // Si la fila vacía existe, asegúrate de que se muestre
+                const emptyRow = document.getElementById('fila-vacia-comparacion');
+                if (emptyRow) emptyRow.style.display = 'table-row';
                 return;
             }
 
-            filaVaciaComparacion.style.display = 'none';
+            // Ocultar la fila vacía
+            const emptyRow = document.getElementById('fila-vacia-comparacion');
+            if (emptyRow) emptyRow.style.display = 'none';
+
             tablaComparacion.innerHTML = '';
             
             productosParaComparar.forEach(item => {
@@ -727,8 +729,9 @@
                 
                 const getCelda = (precio, key) => {
                     const supermercado = SUPERMERCADOS[key];
-                    const isMin = precio === minPrecio && precio > 0; // Solo si es el mínimo y no es cero
-                    // Si es el mínimo, establece el nombre
+                    // Es el precio mínimo (y el precio es positivo)
+                    const isMin = precio === minPrecio && precio > 0; 
+                    
                     if (isMin) mejorSuper = supermercado.replace(' (Simulado)', ''); 
                     
                     const classes = isMin 
