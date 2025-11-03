@@ -10,7 +10,7 @@
     <!-- PDF.js - Versión completa. Debe ser lo primero en cargar el JavaScript. -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
     
-    <!-- Importación de la fuente 'Inter' (letra corporativa) -->
+    <!-- Importación de la fuente 'Inter' -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -52,6 +52,14 @@
             border-bottom-color: transparent;
             color: #6b7280; /* gray-500 */
         }
+
+        /* Fija la columna de producto en la tabla de comparación para móvil */
+        #tabla-comparacion-precios .sticky-col {
+            position: sticky;
+            left: 0;
+            background-color: white; /* Asegurar que el fondo sea blanco */
+            z-index: 10;
+        }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800">
@@ -70,11 +78,11 @@
 
         <!-- Pestañas de Navegación -->
         <div class="mb-6 border-b border-gray-300">
-            <nav class="flex -mb-px space-x-6">
-                <button id="btn-tab-analisis" class="tab-btn active py-3 px-1 text-base" onclick="mostrarTab('tab-analisis')">
+            <nav class="flex -mb-px space-x-6 overflow-x-auto">
+                <button id="btn-tab-analisis" class="tab-btn active py-3 px-1 text-base whitespace-nowrap" onclick="mostrarTab('tab-analisis')">
                     1. Analizar Factura (Merkahorro)
                 </button>
-                <button id="btn-tab-comparacion" class="tab-btn py-3 px-1 text-base" onclick="mostrarTab('tab-comparacion')">
+                <button id="btn-tab-comparacion" class="tab-btn py-3 px-1 text-base whitespace-nowrap" onclick="mostrarTab('tab-comparacion')">
                     2. Comparación de Precios
                 </button>
             </nav>
@@ -161,7 +169,7 @@
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th class="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider sticky left-0 bg-gray-50 z-10">Producto</th>
+                                    <th class="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider sticky left-0 bg-gray-50 z-10 sticky-col">Producto</th>
                                     <th class="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase tracking-wider">Merkahorro (Factura)</th>
                                     <th class="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase tracking-wider">Éxito (P. Norte)</th>
                                     <th class="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase tracking-wider">L Pineda (Simulado)</th>
@@ -348,8 +356,9 @@
          */
         async function processPDF(file) {
             // Verificar si pdfjsLib existe (doble check de seguridad)
-            if (typeof pdfjsLib === 'undefined') {
-                showError("La librería PDF.js no se cargó correctamente. Por favor, intenta recargar la página.");
+            if (typeof pdfjsLib === 'undefined' || !pdfjsLib.getDocument) {
+                // Esta verificación es la clave para evitar el ReferenceError
+                showError("La librería PDF.js no se cargó o inicializó correctamente. Por favor, intenta recargar la página.");
                 return;
             }
 
@@ -359,7 +368,6 @@
                     const typedarray = new Uint8Array(e.target.result);
                     
                     // Inicializar el documento PDF
-                    // Uso corregido y robusto para obtener el documento
                     const pdf = await pdfjsLib.getDocument({data: typedarray}).promise; 
 
                     totalPagesEl.textContent = pdf.numPages;
@@ -386,8 +394,8 @@
                     productosMerkahorro.forEach(item => {
                         // Usar una clave normalizada para evitar duplicados por espacios/mayúsculas
                         const key = item.descripcion.trim().toUpperCase();
-                        if (!uniqueProducts[key]) {
-                            uniqueProducts[key] = item;
+                        if (!uniqueProducts[key] || item.precioUnitario > uniqueProducts[key].precioUnitario) {
+                            uniqueProducts[key] = item; // Mantener el precio unitario más alto si hay duplicados (más seguro)
                         }
                     });
                     productosMerkahorro = Object.values(uniqueProducts);
@@ -523,7 +531,6 @@
         
         /**
          * Genera precios simulados para la comparación.
-         * Se usó 'let' en las variables simuladas para permitir la reasignación (redondeo).
          * @param {Array} items - Productos extraídos de Merkahorro.
          */
         function generarDatosComparacion(items) {
@@ -745,7 +752,7 @@
 
                 const fila = `
                     <tr class="hover:bg-gray-50">
-                        <td class="px-3 py-4 text-sm font-medium text-gray-900 sticky left-0 bg-white">${item.descripcion}</td>
+                        <td class="px-3 py-4 text-sm font-medium text-gray-900 sticky-col">${item.descripcion}</td>
                         ${getCelda(precios.merkahorro, 'merkahorro')}
                         ${getCelda(precios.exito, 'exito')}
                         ${getCelda(precios.lPineda, 'lPineda')}
